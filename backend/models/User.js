@@ -18,7 +18,9 @@ const userSchema = new mongoose.Schema({
         type: String,
         enum: ['admin', 'user'],
         default: 'user'
-    }
+    },
+    dogrulanmis: { type: Boolean, default: false },
+    dogrulamaToken: { type: String }
 })
 
-module.exports = mongoose.model('User', userSchema)
+module.exports = mongoose.model('User', userSchema)

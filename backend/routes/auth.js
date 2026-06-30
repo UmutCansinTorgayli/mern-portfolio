@@ -4,15 +4,16 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const { body, validationResult } = require('express-validator')
 const rateLimit = require('express-rate-limit')
+const nodemailer = require('nodemailer')
+const crypto = require('crypto')
 const User = require('../models/User')
 
 const loginLimiter = rateLimit({
     windowMs: 3 * 60 * 1000,
     max: 5,
-    message: { mesaj: 'Cok fazla giris denemesi! 15 dakika bekle.' }
+    message: { mesaj: 'Cok fazla giris denemesi! 3 dakika bekle.' }
 })
 
-// Kayıt
 // Kayıt
 router.post('/kayit', [
     body('ad').notEmpty().withMessage('Ad bos olamaz'),
@@ -24,25 +25,68 @@ router.post('/kayit', [
         return res.status(400).json({ hatalar: hatalar.array() })
     }
 
-    // Gelen istekten adminSecret (Yönetici Kodu) alanını alıyoruz
     const { ad, email, sifre, adminSecret } = req.body
 
-    // Kod doğrulaması yapıyoruz
+    // Yönetici kodu doğrulaması
     if (adminSecret !== process.env.ADMIN_REGISTRATION_SECRET) {
         return res.status(403).json({ mesaj: 'Geçersiz Yönetici Kodu! Yetkisiz kullanıcı kaydı yapılamaz.' })
     }
 
     try {
         const hashedSifre = await bcrypt.hash(sifre, 10)
-        // Yönetici kodu doğru olduğuna göre, bu kullanıcıyı doğrudan 'admin' rolüyle kaydediyoruz
-        const yeniKullanici = new User({ ad, email, sifre: hashedSifre, rol: 'admin' })
+        const dogrulamaToken = crypto.randomBytes(32).toString('hex')
+
+        const yeniKullanici = new User({
+            ad,
+            email,
+            sifre: hashedSifre,
+            rol: 'admin',
+            dogrulanmis: false,
+            dogrulamaToken
+        })
         await yeniKullanici.save()
-        res.json({ mesaj: 'Kullanici olusturuldu!' })
+
+        // Doğrulama e-postası gönder
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        })
+
+        const dogrulamaLinki = `http://localhost:5000/api/auth/dogrula/${dogrulamaToken}`
+
+        await transporter.sendMail({
+            from: process.env.EMAIL_USER,
+            to: email,
+            subject: 'Hesabınızı Doğrulayın',
+            html: `<p>Merhaba ${ad},</p>
+                   <p>Hesabınızı aktifleştirmek için aşağıdaki bağlantıya tıklayın:</p>
+                   <a href="${dogrulamaLinki}">${dogrulamaLinki}</a>`
+        })
+
+        res.json({ mesaj: 'Kayıt başarılı! E-posta adresinize doğrulama linki gönderildi.' })
     } catch (err) {
         res.status(500).json({ mesaj: 'Sunucu hatasi!', hata: err.message })
     }
 })
 
+// E-posta doğrulama linki
+router.get('/dogrula/:token', async (req, res) => {
+    try {
+        const kullanici = await User.findOne({ dogrulamaToken: req.params.token })
+        if (!kullanici) {
+            return res.status(400).json({ mesaj: 'Geçersiz veya süresi dolmuş doğrulama linki.' })
+        }
+        kullanici.dogrulanmis = true
+        kullanici.dogrulamaToken = undefined
+        await kullanici.save()
+        res.send('<h2>✅ E-posta doğrulandı! Artık giriş yapabilirsiniz.</h2>')
+    } catch (err) {
+        res.status(500).json({ mesaj: 'Sunucu hatasi!', hata: err.message })
+    }
+})
 
 // Giriş
 router.post('/giris', loginLimiter, async (req, res) => {
@@ -50,6 +94,10 @@ router.post('/giris', loginLimiter, async (req, res) => {
     const kullanici = await User.findOne({ email })
     if (!kullanici) {
         return res.status(404).json({ mesaj: 'Kullanici bulunamadi!' })
+    }
+    // E-posta doğrulanmamışsa giriş engelle
+    if (!kullanici.dogrulanmis) {
+        return res.status(403).json({ mesaj: 'E-posta adresiniz henüz doğrulanmadı. Lütfen gelen kutunuzu kontrol edin.' })
     }
     const dogruMu = await bcrypt.compare(sifre, kullanici.sifre)
     if (!dogruMu) {
