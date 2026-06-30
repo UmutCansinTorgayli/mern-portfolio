@@ -4,8 +4,8 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const { body, validationResult } = require('express-validator')
 const rateLimit = require('express-rate-limit')
-const nodemailer = require('nodemailer')
 const crypto = require('crypto')
+const { Resend } = require('resend')
 const User = require('../models/User')
 
 const loginLimiter = rateLimit({
@@ -46,19 +46,12 @@ router.post('/kayit', [
         })
         await yeniKullanici.save()
 
-        // Doğrulama e-postası gönder
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS
-            }
-        })
-
+        // Resend ile doğrulama e-postası gönder
+        const resend = new Resend(process.env.RESEND_API_KEY)
         const dogrulamaLinki = `http://localhost:5000/api/auth/dogrula/${dogrulamaToken}`
 
-        await transporter.sendMail({
-            from: process.env.EMAIL_USER,
+        await resend.emails.send({
+            from: 'onboarding@resend.dev',
             to: email,
             subject: 'Hesabınızı Doğrulayın',
             html: `<p>Merhaba ${ad},</p>
